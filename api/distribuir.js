@@ -6,13 +6,17 @@ const { DESTINO_POR_SUBAREA } = require("../lib/config");
 // Extrai o ID do deal do payload do webhook do Pipedrive.
 // Cobre os formatos mais comuns (v1 legado e v2).
 function extrairDealId(body) {
-  return (
+  const bruto =
+    body?.deal_id ??
     body?.data?.id ??
     body?.current?.id ??
     body?.object?.id ??
     body?.meta?.id ??
-    null
-  );
+    null;
+
+  if (bruto === null || bruto === undefined || bruto === "") return null;
+  const numero = Number(bruto);
+  return Number.isNaN(numero) ? null : numero;
 }
 
 module.exports = async (req, res) => {
@@ -48,7 +52,17 @@ module.exports = async (req, res) => {
 
     const ownerId = await buscarOwnerIdPorNome(escolhido.nome);
     await moverEAtribuirDeal(dealId, ownerId, destino.pipeline_id, destino.stage_id);
-    await incrementarContador(escolhido);
+
+    // Teste sem a coluna "Reuniões no Dia" ainda criada na planilha: não deixa
+    // o fluxo quebrar, só avisa no log. Antes de ir pra produção, crie a coluna
+    // pra o teto diário funcionar de verdade.
+    try {
+      await incrementarContador(escolhido);
+    } catch (errContador) {
+      console.warn(
+        `Aviso: não foi possível incrementar o contador (coluna '${escolhido._row ? "verifique se a coluna existe" : "?"}' pode não existir ainda). Deal foi distribuído normalmente. Erro: ${errContador.message}`
+      );
+    }
 
     console.log(`Deal ${dealId} atribuído a ${escolhido.nome} (${escolhido.subareaNorm})`);
 
