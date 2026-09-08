@@ -1,0 +1,13 @@
+{
+  "name": "pipedrive-distribuicao",
+  "version": "1.0.0",
+  "description": "Distribuição automática de deals SDR -> Closer no Pipedrive, ponderada por nível/teto diário.",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "google-auth-library": "^9.4.1",
+    "google-spreadsheet": "^4.1.1"
+  }
+}
