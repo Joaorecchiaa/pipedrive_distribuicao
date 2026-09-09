@@ -1,6 +1,7 @@
 const { GoogleSpreadsheet } = require("google-spreadsheet");
 const { JWT } = require("google-auth-library");
 const { norm } = require("../lib/normalizar");
+const { montarMapaCabecalho, getCampo } = require("../lib/sheets");
 const { ABA_COLABORADORES, SUBAREAS_ELEGIVEIS, LIMITE_DIARIO_POR_NIVEL, COLUNA_CONTADOR } = require("../lib/config");
 
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
@@ -26,6 +27,7 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: `Aba '${ABA_COLABORADORES}' não encontrada.` });
     }
 
+    const mapaCabecalho = montarMapaCabecalho(sheet);
     const rows = await sheet.getRows();
     const hoje = new Date();
     const mesAtual = hoje.getMonth() + 1;
@@ -35,25 +37,29 @@ module.exports = async (req, res) => {
     let elegiveisCount = 0;
 
     for (const row of rows) {
-      const cargo = String(row.get("Cargo") || "");
+      const cargo = String(getCampo(row, mapaCabecalho, "Cargo") || "");
       const cargoNorm = norm(cargo);
-      const subareaNorm = norm(row.get("Subarea"));
-      const statusNorm = norm(row.get("Status (Equipe Comercial)"));
-      const mesRef = parseInt(row.get("Mês Referência"), 10);
-      const anoRef = parseInt(row.get("Ano Referência"), 10);
-      const nome = row.get("Nome");
+      const subareaVal = getCampo(row, mapaCabecalho, "Subarea");
+      const subareaNorm = norm(subareaVal);
+      const statusVal = getCampo(row, mapaCabecalho, "Status (Equipe Comercial)");
+      const statusNorm = norm(statusVal);
+      const mesRefVal = getCampo(row, mapaCabecalho, "Mês Referência");
+      const anoRefVal = getCampo(row, mapaCabecalho, "Ano Referência");
+      const mesRef = parseInt(mesRefVal, 10);
+      const anoRef = parseInt(anoRefVal, 10);
+      const nome = getCampo(row, mapaCabecalho, "Nome");
 
-      if (!cargoNorm.includes("closer")) continue; // ignora quem nem é closer, pra não poluir
+      if (!cargoNorm.includes("closer")) continue;
 
       const motivos = [];
       if (!SUBAREAS_ELEGIVEIS.includes(subareaNorm)) {
-        motivos.push(`Subarea '${row.get("Subarea")}' (normalizado: '${subareaNorm}') não está em [${SUBAREAS_ELEGIVEIS.join(", ")}]`);
+        motivos.push(`Subarea '${subareaVal}' (normalizado: '${subareaNorm}') não está em [${SUBAREAS_ELEGIVEIS.join(", ")}]`);
       }
       if (statusNorm !== "ativo") {
-        motivos.push(`Status '${row.get("Status (Equipe Comercial)")}' (normalizado: '${statusNorm}') != 'ativo'`);
+        motivos.push(`Status '${statusVal}' (normalizado: '${statusNorm}') != 'ativo'`);
       }
       if (mesRef !== mesAtual || anoRef !== anoAtual) {
-        motivos.push(`Mês/Ano Referência = ${row.get("Mês Referência")}/${row.get("Ano Referência")}, esperado ${mesAtual}/${anoAtual}`);
+        motivos.push(`Mês/Ano Referência = ${mesRefVal}/${anoRefVal}, esperado ${mesAtual}/${anoAtual}`);
       }
       const nivelMatch = cargo.match(/(\d+)/);
       if (!nivelMatch) {
@@ -67,17 +73,18 @@ module.exports = async (req, res) => {
       diagnostico.push({
         nome,
         cargo,
-        subarea: row.get("Subarea"),
-        status: row.get("Status (Equipe Comercial)"),
-        mesRef: row.get("Mês Referência"),
-        anoRef: row.get("Ano Referência"),
-        reunioesHoje: row.get(COLUNA_CONTADOR),
+        subarea: subareaVal,
+        status: statusVal,
+        mesRef: mesRefVal,
+        anoRef: anoRefVal,
+        reunioesHoje: getCampo(row, mapaCabecalho, COLUNA_CONTADOR),
         elegivel: motivos.length === 0,
         motivos_exclusao: motivos,
       });
     }
 
     return res.status(200).json({
+      cabecalhosReaisDaPlanilha: sheet.headerValues,
       mesAtualEsperado: mesAtual,
       anoAtualEsperado: anoAtual,
       totalClosersNaPlanilha: diagnostico.length,
