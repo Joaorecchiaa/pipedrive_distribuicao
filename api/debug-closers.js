@@ -27,11 +27,24 @@ module.exports = async (req, res) => {
       return res.status(404).json({ error: `Aba '${ABA_COLABORADORES}' não encontrada.` });
     }
 
-    const mapaCabecalho = montarMapaCabecalho(sheet);
+    const mapaCabecalho = await montarMapaCabecalho(sheet);
     const rows = await sheet.getRows();
     const hoje = new Date();
     const mesAtual = hoje.getMonth() + 1;
     const anoAtual = hoje.getFullYear();
+
+    // Diagnóstico extra: confirma se as linhas foram lidas e se o mapeamento
+    // de "Cargo" está encontrando o valor certo na primeira linha.
+    const diagnosticoTecnico = {
+      totalLinhasLidas: rows.length,
+      mapaCabecalhoResolvido: mapaCabecalho,
+      exemploPrimeiraLinha: rows[0]
+        ? {
+            cargoLido: getCampo(rows[0], mapaCabecalho, "Cargo"),
+            nomeLido: getCampo(rows[0], mapaCabecalho, "Nome"),
+          }
+        : null,
+    };
 
     const diagnostico = [];
     let elegiveisCount = 0;
@@ -84,6 +97,7 @@ module.exports = async (req, res) => {
     }
 
     return res.status(200).json({
+      diagnosticoTecnico,
       cabecalhosReaisDaPlanilha: sheet.headerValues,
       mesAtualEsperado: mesAtual,
       anoAtualEsperado: anoAtual,
@@ -95,5 +109,3 @@ module.exports = async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 };
-
-
