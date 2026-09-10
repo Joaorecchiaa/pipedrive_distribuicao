@@ -1,4 +1,4 @@
-const { getClosersElegiveis, incrementarContador } = require("../lib/sheets");
+const { getClosersElegiveis, incrementarContador, registrarLog } = require("../lib/sheets");
 const { escolherCloser } = require("../lib/distribuicao");
 const { buscarOwnerIdPorNome, moverEAtribuirDeal } = require("../lib/pipedrive");
 const { DESTINO_POR_SUBAREA } = require("../lib/config");
@@ -53,15 +53,24 @@ module.exports = async (req, res) => {
     const ownerId = await buscarOwnerIdPorNome(escolhido.nome);
     await moverEAtribuirDeal(dealId, ownerId, destino.pipeline_id, destino.stage_id);
 
-    // Teste sem a coluna "Reuniões no Dia" ainda criada na planilha: não deixa
+    // Teste sem a coluna do contador ainda criada na planilha: não deixa
     // o fluxo quebrar, só avisa no log. Antes de ir pra produção, crie a coluna
     // pra o teto diário funcionar de verdade.
+    let reunioesAposDistribuicao = escolhido.reunioesHoje + 1;
     try {
       await incrementarContador(escolhido);
     } catch (errContador) {
+      reunioesAposDistribuicao = null; // não sabemos o valor real se não incrementou
       console.warn(
-        `Aviso: não foi possível incrementar o contador (coluna '${escolhido._row ? "verifique se a coluna existe" : "?"}' pode não existir ainda). Deal foi distribuído normalmente. Erro: ${errContador.message}`
+        `Aviso: não foi possível incrementar o contador. Deal foi distribuído normalmente. Erro: ${errContador.message}`
       );
+    }
+
+    // Log em log_distribuicao — não deixa o fluxo quebrar se a aba ainda não existir.
+    try {
+      await registrarLog(escolhido, dealId, reunioesAposDistribuicao);
+    } catch (errLog) {
+      console.warn(`Aviso: não foi possível registrar no log_distribuicao. Erro: ${errLog.message}`);
     }
 
     console.log(`Deal ${dealId} atribuído a ${escolhido.nome} (${escolhido.subareaNorm})`);
