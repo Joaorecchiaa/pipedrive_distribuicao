@@ -13,6 +13,7 @@ const {
   SUBAREAS_ELEGIVEIS,
   LIMITE_DIARIO_POR_NIVEL,
   COLUNA_NOME_DISTRIBUICAO,
+  COLUNA_CARGO_DISTRIBUICAO,
   COLUNA_CONTADOR,
 } = require("../lib/config");
 
@@ -34,10 +35,14 @@ module.exports = async (req, res) => {
     const rowsDist = await sheetDist.getRows();
 
     const indiceDist = {};
+    let ordemFilaAtual = 0;
     for (const row of rowsDist) {
+      const cargoDist = norm(getCampo(row, mapaDist, COLUNA_CARGO_DISTRIBUICAO));
+      if (!cargoDist.includes("closer")) continue;
       const nome = getCampo(row, mapaDist, COLUNA_NOME_DISTRIBUICAO);
       if (!nome) continue;
-      indiceDist[norm(nome)] = row;
+      indiceDist[norm(nome)] = { row, ordemFila: ordemFilaAtual };
+      ordemFilaAtual++;
     }
 
     const hoje = new Date();
@@ -81,10 +86,12 @@ module.exports = async (req, res) => {
 
       const linhaDist = indiceDist[norm(nome)];
       let reunioesHoje = null;
+      let ordemFila = null;
       if (!linhaDist) {
-        motivos.push(`Nome '${nome}' não encontrado na aba '${ABA_DISTRIBUICAO}' (normalizado: '${norm(nome)}')`);
+        motivos.push(`Nome '${nome}' não encontrado na aba '${ABA_DISTRIBUICAO}' com Cargo contendo "closer" (normalizado: '${norm(nome)}')`);
       } else {
-        reunioesHoje = getCampo(linhaDist, mapaDist, COLUNA_CONTADOR);
+        reunioesHoje = getCampo(linhaDist.row, mapaDist, COLUNA_CONTADOR);
+        ordemFila = linhaDist.ordemFila;
       }
 
       if (motivos.length === 0) elegiveisCount++;
@@ -97,6 +104,7 @@ module.exports = async (req, res) => {
         mesRef: mesRefVal,
         anoRef: anoRefVal,
         encontradoNaDistribuicao: !!linhaDist,
+        ordemFila,
         reunioesHoje,
         elegivel: motivos.length === 0,
         motivos_exclusao: motivos,
