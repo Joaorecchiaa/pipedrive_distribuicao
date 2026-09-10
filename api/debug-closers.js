@@ -11,10 +11,10 @@ const {
   ABA_COLABORADORES,
   ABA_DISTRIBUICAO,
   SUBAREAS_ELEGIVEIS,
-  LIMITE_DIARIO_POR_NIVEL,
   COLUNA_NOME_DISTRIBUICAO,
   COLUNA_CARGO_DISTRIBUICAO,
-  COLUNA_CONTADOR,
+  COLUNA_META,
+  COLUNA_RECEBIDAS,
 } = require("../lib/config");
 
 module.exports = async (req, res) => {
@@ -77,21 +77,21 @@ module.exports = async (req, res) => {
       if (mesRef !== mesAtual || anoRef !== anoAtual) {
         motivos.push(`Mês/Ano Referência = ${mesRefVal}/${anoRefVal}, esperado ${mesAtual}/${anoAtual}`);
       }
-      const nivelMatch = cargo.match(/(\d+)/);
-      if (!nivelMatch) {
-        motivos.push(`Cargo '${cargo}' não tem número extraível`);
-      } else if (!LIMITE_DIARIO_POR_NIVEL[parseInt(nivelMatch[1], 10)]) {
-        motivos.push(`Nível ${nivelMatch[1]} não está no mapa de LIMITE_DIARIO_POR_NIVEL`);
-      }
 
-      const linhaDist = indiceDist[norm(nome)];
-      let reunioesHoje = null;
+      const entradaDist = indiceDist[norm(nome)];
+      let meta = null;
+      let recebidas = null;
       let ordemFila = null;
-      if (!linhaDist) {
+      if (!entradaDist) {
         motivos.push(`Nome '${nome}' não encontrado na aba '${ABA_DISTRIBUICAO}' com Cargo contendo "closer" (normalizado: '${norm(nome)}')`);
       } else {
-        reunioesHoje = getCampo(linhaDist.row, mapaDist, COLUNA_CONTADOR);
-        ordemFila = linhaDist.ordemFila;
+        ordemFila = entradaDist.ordemFila;
+        const metaRaw = getCampo(entradaDist.row, mapaDist, COLUNA_META);
+        meta = parseInt(metaRaw, 10);
+        if (!meta || meta <= 0) {
+          motivos.push(`Meta '${metaRaw}' na coluna ${COLUNA_META} ausente ou inválida`);
+        }
+        recebidas = parseFloat(getCampo(entradaDist.row, mapaDist, COLUNA_RECEBIDAS) || "0") || 0;
       }
 
       if (motivos.length === 0) elegiveisCount++;
@@ -103,9 +103,10 @@ module.exports = async (req, res) => {
         status: statusVal,
         mesRef: mesRefVal,
         anoRef: anoRefVal,
-        encontradoNaDistribuicao: !!linhaDist,
+        encontradoNaDistribuicao: !!entradaDist,
         ordemFila,
-        reunioesHoje,
+        meta,
+        recebidasHoje: recebidas,
         elegivel: motivos.length === 0,
         motivos_exclusao: motivos,
       });
