@@ -1,10 +1,20 @@
-const { GoogleSpreadsheet } = require("google-spreadsheet");
-const { JWT } = require("google-auth-library");
 const { norm } = require("../lib/normalizar");
-const { montarMapaCabecalho, getCampo } = require("../lib/sheets");
-const { ABA_COLABORADORES, SUBAREAS_ELEGIVEIS, LIMITE_DIARIO_POR_NIVEL, COLUNA_CONTADOR } = require("../lib/config");
-
-const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const {
+  getDoc,
+  getAba,
+  montarMapaCabecalho,
+  getCampo,
+  ALIASES_COLABORADORES,
+  ALIASES_DISTRIBUICAO,
+} = require("../lib/sheets");
+const {
+  ABA_COLABORADORES,
+  ABA_DISTRIBUICAO,
+  SUBAREAS_ELEGIVEIS,
+  LIMITE_DIARIO_POR_NIVEL,
+  COLUNA_NOME_DISTRIBUICAO,
+  COLUNA_CONTADOR,
+} = require("../lib/config");
 
 module.exports = async (req, res) => {
   const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
@@ -13,54 +23,42 @@ module.exports = async (req, res) => {
   }
 
   try {
-    const creds = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
-    const jwt = new JWT({
-      email: creds.client_email,
-      key: creds.private_key,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-    });
-    const doc = new GoogleSpreadsheet(SHEET_ID, jwt);
-    await doc.loadInfo();
+    const doc = await getDoc();
 
-    const sheet = doc.sheetsByTitle[ABA_COLABORADORES];
-    if (!sheet) {
-      return res.status(404).json({ error: `Aba '${ABA_COLABORADORES}' não encontrada.` });
+    const sheetColab = await getAba(doc, ABA_COLABORADORES);
+    const mapaColab = await montarMapaCabecalho(sheetColab, ALIASES_COLABORADORES);
+    const rowsColab = await sheetColab.getRows();
+
+    const sheetDist = await getAba(doc, ABA_DISTRIBUICAO);
+    const mapaDist = await montarMapaCabecalho(sheetDist, ALIASES_DISTRIBUICAO);
+    const rowsDist = await sheetDist.getRows();
+
+    const indiceDist = {};
+    for (const row of rowsDist) {
+      const nome = getCampo(row, mapaDist, COLUNA_NOME_DISTRIBUICAO);
+      if (!nome) continue;
+      indiceDist[norm(nome)] = row;
     }
 
-    const mapaCabecalho = await montarMapaCabecalho(sheet);
-    const rows = await sheet.getRows();
     const hoje = new Date();
     const mesAtual = hoje.getMonth() + 1;
     const anoAtual = hoje.getFullYear();
 
-    // Diagnóstico extra: confirma se as linhas foram lidas e se o mapeamento
-    // de "Cargo" está encontrando o valor certo na primeira linha.
-    const diagnosticoTecnico = {
-      totalLinhasLidas: rows.length,
-      mapaCabecalhoResolvido: mapaCabecalho,
-      exemploPrimeiraLinha: rows[0]
-        ? {
-            cargoLido: getCampo(rows[0], mapaCabecalho, "Cargo"),
-            nomeLido: getCampo(rows[0], mapaCabecalho, "Nome"),
-          }
-        : null,
-    };
-
     const diagnostico = [];
     let elegiveisCount = 0;
 
-    for (const row of rows) {
-      const cargo = String(getCampo(row, mapaCabecalho, "Cargo") || "");
+    for (const row of rowsColab) {
+      const cargo = String(getCampo(row, mapaColab, "Cargo") || "");
       const cargoNorm = norm(cargo);
-      const subareaVal = getCampo(row, mapaCabecalho, "Subarea");
+      const subareaVal = getCampo(row, mapaColab, "Subarea");
       const subareaNorm = norm(subareaVal);
-      const statusVal = getCampo(row, mapaCabecalho, "Status (Equipe Comercial)");
+      const statusVal = getCampo(row, mapaColab, "Status (Equipe Comercial)");
       const statusNorm = norm(statusVal);
-      const mesRefVal = getCampo(row, mapaCabecalho, "Mês Referência");
-      const anoRefVal = getCampo(row, mapaCabecalho, "Ano Referência");
+      const mesRefVal = getCampo(row, mapaColab, "Mês Referência");
+      const anoRefVal = getCampo(row, mapaColab, "Ano Referência");
       const mesRef = parseInt(mesRefVal, 10);
       const anoRef = parseInt(anoRefVal, 10);
-      const nome = getCampo(row, mapaCabecalho, "Nome");
+      const nome = getCampo(row, mapaColab, "Nome");
 
       if (!cargoNorm.includes("closer")) continue;
 
@@ -81,6 +79,14 @@ module.exports = async (req, res) => {
         motivos.push(`Nível ${nivelMatch[1]} não está no mapa de LIMITE_DIARIO_POR_NIVEL`);
       }
 
+      const linhaDist = indiceDist[norm(nome)];
+      let reunioesHoje = null;
+      if (!linhaDist) {
+        motivos.push(`Nome '${nome}' não encontrado na aba '${ABA_DISTRIBUICAO}' (normalizado: '${norm(nome)}')`);
+      } else {
+        reunioesHoje = getCampo(linhaDist, mapaDist, COLUNA_CONTADOR);
+      }
+
       if (motivos.length === 0) elegiveisCount++;
 
       diagnostico.push({
@@ -90,15 +96,17 @@ module.exports = async (req, res) => {
         status: statusVal,
         mesRef: mesRefVal,
         anoRef: anoRefVal,
-        reunioesHoje: getCampo(row, mapaCabecalho, COLUNA_CONTADOR),
+        encontradoNaDistribuicao: !!linhaDist,
+        reunioesHoje,
         elegivel: motivos.length === 0,
         motivos_exclusao: motivos,
       });
     }
 
     return res.status(200).json({
-      diagnosticoTecnico,
-      cabecalhosReaisDaPlanilha: sheet.headerValues,
+      cabecalhosColaboradores: sheetColab.headerValues,
+      cabecalhosDistribuicao: sheetDist.headerValues,
+      totalLinhasDistribuicao: rowsDist.length,
       mesAtualEsperado: mesAtual,
       anoAtualEsperado: anoAtual,
       totalClosersNaPlanilha: diagnostico.length,
