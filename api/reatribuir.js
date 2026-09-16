@@ -3,7 +3,7 @@ const { buscarDonoAtualDoDeal } = require("../lib/pipedrive");
 const {
   buscarUltimoLogPorDeal,
   marcarLogAlterado,
-  descontarContadorPorNome,
+  transferirCredito,
   ehHoje,
 } = require("../lib/sheets");
 
@@ -64,11 +64,15 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "registro de dia anterior" });
     }
 
-    const novoValor = await descontarContadorPorNome(logEntry.colaborador);
+    const novoValor = await transferirCredito(logEntry.colaborador, donoAtual);
     await marcarLogAlterado(logEntry, donoAtual);
 
     console.log(
-      `Deal ${dealId} reatribuído de ${logEntry.colaborador} para ${donoAtual}. Contador de ${logEntry.colaborador} corrigido para ${novoValor}.`
+      `Deal ${dealId} reatribuído de ${logEntry.colaborador} para ${donoAtual}. ` +
+        `Crédito de ${logEntry.colaborador} corrigido para ${novoValor.creditoAntigoNovoValor}. ` +
+        (novoValor.novoEhCloser
+          ? `${donoAtual} agora tem crédito ${novoValor.creditoNovoNovoValor}.`
+          : `${donoAtual} não é Closer cadastrado — ninguém foi creditado.`)
     );
 
     return res.status(200).json({
@@ -76,8 +80,10 @@ module.exports = async (req, res) => {
       acao: "corrigido",
       deal_id: dealId,
       closer_original: logEntry.colaborador,
+      credito_original_corrigido_para: novoValor.creditoAntigoNovoValor,
       novo_dono: donoAtual,
-      contador_corrigido_para: novoValor,
+      novo_dono_e_closer: novoValor.novoEhCloser,
+      credito_novo_dono: novoValor.creditoNovoNovoValor,
     });
   } catch (err) {
     console.error("Erro ao processar reatribuição:", err);
