@@ -60,12 +60,12 @@ module.exports = async (req, res) => {
     if (!ehHoje(logEntry.dataHora)) {
       // Distribuição foi em outro dia — o contador já resetou, nada a
       // descontar na planilha (mas registra que já vimos essa divergência).
-      await marcarLogAlterado(logEntry);
+      await marcarLogAlterado(logEntry, donoAtual);
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "registro de dia anterior" });
     }
 
     const novoValor = await descontarContadorPorNome(logEntry.colaborador);
-    await marcarLogAlterado(logEntry);
+    await marcarLogAlterado(logEntry, donoAtual);
 
     console.log(
       `Deal ${dealId} reatribuído de ${logEntry.colaborador} para ${donoAtual}. Contador de ${logEntry.colaborador} corrigido para ${novoValor}.`
