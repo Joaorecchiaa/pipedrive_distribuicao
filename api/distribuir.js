@@ -53,14 +53,10 @@ module.exports = async (req, res) => {
     const ownerId = await buscarOwnerIdPorNome(escolhido.nome);
     await moverEAtribuirDeal(dealId, ownerId, destino.pipeline_id, destino.stage_id);
 
-    // Teste sem a coluna do contador ainda criada na planilha: não deixa
-    // o fluxo quebrar, só avisa no log. Antes de ir pra produção, crie a coluna
-    // pra o teto diário funcionar de verdade.
     let reunioesAposDistribuicao = escolhido.reunioesHoje + 1;
     try {
-      await incrementarContador(escolhido);
+      reunioesAposDistribuicao = await incrementarContador(escolhido);
     } catch (errContador) {
-      reunioesAposDistribuicao = null; // não sabemos o valor real se não incrementou
       console.warn(
         `Aviso: não foi possível incrementar o contador. Deal foi distribuído normalmente. Erro: ${errContador.message}`
       );
