@@ -1,6 +1,6 @@
 const { getClosersElegiveis, incrementarContador, registrarLog } = require("../lib/sheets");
 const { escolherCloser } = require("../lib/distribuicao");
-const { buscarOwnerIdPorNome, moverEAtribuirDeal } = require("../lib/pipedrive");
+const { buscarOwnerIdPorNome, moverEAtribuirDeal, buscarDueDateReuniao } = require("../lib/pipedrive");
 const { DESTINO_POR_SUBAREA } = require("../lib/config");
 
 // Extrai o ID do deal do payload do webhook do Pipedrive.
@@ -53,13 +53,34 @@ module.exports = async (req, res) => {
     const ownerId = await buscarOwnerIdPorNome(escolhido.nome);
     await moverEAtribuirDeal(dealId, ownerId, destino.pipeline_id, destino.stage_id);
 
-    let reunioesAposDistribuicao = escolhido.reunioesHoje + 1;
+    // Só conta pra hoje se a reunião estiver de fato agendada pra hoje
+    // (due_date da atividade). Se for pra outro dia, não incrementa nada —
+    // não conta em dia nenhum, só não pode contar hoje.
+    let contaHoje = true;
     try {
-      reunioesAposDistribuicao = await incrementarContador(escolhido);
-    } catch (errContador) {
+      const dueDate = await buscarDueDateReuniao(dealId);
+      if (dueDate) {
+        const hojeStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // "AAAA-MM-DD"
+        contaHoje = dueDate === hojeStr;
+      }
+    } catch (errDueDate) {
       console.warn(
-        `Aviso: não foi possível incrementar o contador. Deal foi distribuído normalmente. Erro: ${errContador.message}`
+        `Aviso: não foi possível checar due_date da reunião do deal ${dealId}. Contando como hoje por padrão. Erro: ${errDueDate.message}`
       );
+    }
+
+    let reunioesAposDistribuicao = escolhido.reunioesHoje;
+    if (contaHoje) {
+      reunioesAposDistribuicao = escolhido.reunioesHoje + 1;
+      try {
+        reunioesAposDistribuicao = await incrementarContador(escolhido);
+      } catch (errContador) {
+        console.warn(
+          `Aviso: não foi possível incrementar o contador. Deal foi distribuído normalmente. Erro: ${errContador.message}`
+        );
+      }
+    } else {
+      console.log(`Deal ${dealId}: reunião agendada pra outro dia, não incrementado o contador de hoje.`);
     }
 
     // Log em log_distribuicao — não deixa o fluxo quebrar se a aba ainda não existir.
@@ -77,6 +98,7 @@ module.exports = async (req, res) => {
       closer: escolhido.nome,
       subarea: escolhido.subareaNorm,
       destino,
+      contou_para_hoje: contaHoje,
     });
   } catch (err) {
     console.error("Erro ao processar distribuição:", err);
