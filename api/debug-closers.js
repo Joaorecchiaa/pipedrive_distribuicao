@@ -4,6 +4,7 @@ const {
   getAba,
   montarMapaCabecalho,
   getCampo,
+  buscarClosersEmEscalaAgora,
   ALIASES_COLABORADORES,
   ALIASES_DISTRIBUICAO,
 } = require("../lib/sheets");
@@ -48,6 +49,9 @@ module.exports = async (req, res) => {
     const hoje = new Date();
     const mesAtual = hoje.getMonth() + 1;
     const anoAtual = hoje.getFullYear();
+
+    const emEscala = await buscarClosersEmEscalaAgora();
+    const fallbackAtivo = emEscala.size === 0;
 
     const diagnostico = [];
     let elegiveisCount = 0;
@@ -94,6 +98,10 @@ module.exports = async (req, res) => {
         recebidas = parseFloat(getCampo(entradaDist.row, mapaDist, COLUNA_RECEBIDAS) || "0") || 0;
       }
 
+      if (motivos.length === 0 && !fallbackAtivo && !emEscala.has(norm(nome))) {
+        motivos.push(`Fora do horário de turno agora (não está na aba escala_comercial no momento)`);
+      }
+
       if (motivos.length === 0) elegiveisCount++;
 
       diagnostico.push({
@@ -107,6 +115,7 @@ module.exports = async (req, res) => {
         ordemFila,
         meta,
         recebidasHoje: recebidas,
+        naEscalaAgora: emEscala.has(norm(nome)),
         elegivel: motivos.length === 0,
         motivos_exclusao: motivos,
       });
@@ -118,6 +127,8 @@ module.exports = async (req, res) => {
       totalLinhasDistribuicao: rowsDist.length,
       mesAtualEsperado: mesAtual,
       anoAtualEsperado: anoAtual,
+      fallbackDeEscalaAtivo: fallbackAtivo,
+      totalClosersNaEscalaAgora: emEscala.size,
       totalClosersNaPlanilha: diagnostico.length,
       totalElegiveis: elegiveisCount,
       detalhes: diagnostico,
