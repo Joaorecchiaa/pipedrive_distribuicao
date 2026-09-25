@@ -57,11 +57,12 @@ module.exports = async (req, res) => {
     // (due_date da atividade). Se for pra outro dia, não incrementa nada —
     // não conta em dia nenhum, só não pode contar hoje.
     let contaHoje = true;
+    let dueDateEncontrada = null;
     try {
-      const dueDate = await buscarDueDateReuniao(dealId);
-      if (dueDate) {
+      dueDateEncontrada = await buscarDueDateReuniao(dealId);
+      if (dueDateEncontrada) {
         const hojeStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // "AAAA-MM-DD"
-        contaHoje = dueDate === hojeStr;
+        contaHoje = dueDateEncontrada === hojeStr;
       }
     } catch (errDueDate) {
       console.warn(
@@ -85,7 +86,7 @@ module.exports = async (req, res) => {
 
     // Log em log_distribuicao — não deixa o fluxo quebrar se a aba ainda não existir.
     try {
-      await registrarLog(escolhido, dealId, reunioesAposDistribuicao);
+      await registrarLog(escolhido, dealId, reunioesAposDistribuicao, contaHoje ? null : dueDateEncontrada);
     } catch (errLog) {
       console.warn(`Aviso: não foi possível registrar no log_distribuicao. Erro: ${errLog.message}`);
     }
