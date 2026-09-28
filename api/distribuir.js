@@ -1,6 +1,6 @@
 const { getClosersElegiveis, incrementarContador, registrarLog } = require("../lib/sheets");
 const { escolherCloser } = require("../lib/distribuicao");
-const { buscarOwnerIdPorNome, moverEAtribuirDeal, buscarDueDateReuniao } = require("../lib/pipedrive");
+const { buscarOwnerIdPorNome, moverEAtribuirDeal, buscarReuniaoRelevante } = require("../lib/pipedrive");
 const { DESTINO_POR_SUBAREA } = require("../lib/config");
 
 // Extrai o ID do deal do payload do webhook do Pipedrive.
@@ -37,10 +37,26 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: "Não foi possível identificar o deal_id no payload." });
     }
 
-    const closers = await getClosersElegiveis();
+    // Busca a reunião (due_date + due_time) ANTES de escolher o closer: quem
+    // pode receber depende do horário da própria reunião (se for pra
+    // amanhã, só quem estiver de plantão amanhã naquele horário), não do
+    // horário em que a distribuição está sendo processada agora.
+    let reuniao = null;
+    try {
+      reuniao = await buscarReuniaoRelevante(dealId);
+    } catch (errReuniao) {
+      console.warn(
+        `Aviso: não foi possível buscar a reunião do deal ${dealId}. Usando a escala de agora como fallback. Erro: ${errReuniao.message}`
+      );
+    }
+
+    const closers = await getClosersElegiveis(
+      reuniao ? { data: reuniao.due_date, hora: reuniao.due_time } : null
+    );
     if (closers.length === 0) {
       return res.status(422).json({
-        error: "Nenhum closer elegível encontrado na planilha (Elite/MGM, ativo, mês/ano atual).",
+        error:
+          "Nenhum closer elegível encontrado na planilha (Elite/MGM, ativo, mês/ano atual, dentro da escala pro horário da reunião).",
       });
     }
 
@@ -55,19 +71,13 @@ module.exports = async (req, res) => {
 
     // Só conta pra hoje se a reunião estiver de fato agendada pra hoje
     // (due_date da atividade). Se for pra outro dia, não incrementa nada —
-    // não conta em dia nenhum, só não pode contar hoje.
+    // não conta em dia nenhum, só não pode contar hoje (e por isso o closer
+    // não perde a vez: o contador dele não sobe).
     let contaHoje = true;
-    let dueDateEncontrada = null;
-    try {
-      dueDateEncontrada = await buscarDueDateReuniao(dealId);
-      if (dueDateEncontrada) {
-        const hojeStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // "AAAA-MM-DD"
-        contaHoje = dueDateEncontrada === hojeStr;
-      }
-    } catch (errDueDate) {
-      console.warn(
-        `Aviso: não foi possível checar due_date da reunião do deal ${dealId}. Contando como hoje por padrão. Erro: ${errDueDate.message}`
-      );
+    const dueDateEncontrada = reuniao ? reuniao.due_date : null;
+    if (dueDateEncontrada) {
+      const hojeStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // "AAAA-MM-DD"
+      contaHoje = dueDateEncontrada === hojeStr;
     }
 
     let reunioesAposDistribuicao = escolhido.reunioesHoje;
