@@ -37,10 +37,15 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: "Não foi possível identificar o deal_id no payload." });
     }
 
-    // Busca a reunião (due_date + due_time) ANTES de escolher o closer: quem
-    // pode receber depende do horário da própria reunião (se for pra
-    // amanhã, só quem estiver de plantão amanhã naquele horário), não do
-    // horário em que a distribuição está sendo processada agora.
+    // Busca a reunião (due_date + due_time) ANTES de escolher o closer.
+    //
+    // Reunião de OUTRO DIA (amanhã em diante): só quem estiver de plantão
+    // naquele dia/horário pode receber — bate a escala contra o horário da
+    // própria reunião, não contra agora.
+    //
+    // Reunião de HOJE (ou deal sem reunião marcada ainda): o closer precisa
+    // estar de plantão AGORA — é ele quem vai atender esse lead na hora, não
+    // só estar presente no horário da reunião marcada.
     let reuniao = null;
     try {
       reuniao = await buscarReuniaoRelevante(dealId);
@@ -50,8 +55,11 @@ module.exports = async (req, res) => {
       );
     }
 
+    const hojeStrEscala = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // "AAAA-MM-DD"
+    const reuniaoEhDeOutroDia = !!(reuniao && reuniao.due_date && reuniao.due_date !== hojeStrEscala);
+
     const closers = await getClosersElegiveis(
-      reuniao ? { data: reuniao.due_date, hora: reuniao.due_time } : null
+      reuniaoEhDeOutroDia ? { data: reuniao.due_date, hora: reuniao.due_time } : null
     );
     if (closers.length === 0) {
       return res.status(422).json({
@@ -76,8 +84,7 @@ module.exports = async (req, res) => {
     let contaHoje = true;
     const dueDateEncontrada = reuniao ? reuniao.due_date : null;
     if (dueDateEncontrada) {
-      const hojeStr = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // "AAAA-MM-DD"
-      contaHoje = dueDateEncontrada === hojeStr;
+      contaHoje = dueDateEncontrada === hojeStrEscala;
     }
 
     let reunioesAposDistribuicao = escolhido.reunioesHoje;
