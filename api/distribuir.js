@@ -1,5 +1,5 @@
-const { getClosersElegiveis, incrementarContador, registrarLog } = require("../lib/sheets");
-const { escolherCloser } = require("../lib/distribuicao");
+const { getClosersElegiveis, incrementarContador, salvarAjusteFila, registrarLog } = require("../lib/sheets");
+const { escolherCloser, calcularEntradasTardias } = require("../lib/distribuicao");
 const { buscarOwnerIdPorNome, moverEAtribuirDeal, buscarReuniaoRelevante } = require("../lib/pipedrive");
 const { DESTINO_POR_SUBAREA } = require("../lib/config");
 
@@ -66,6 +66,18 @@ module.exports = async (req, res) => {
         error:
           "Nenhum closer elegível encontrado na planilha (Elite/MGM, ativo, mês/ano atual, dentro da escala pro horário da reunião).",
       });
+    }
+
+    // Quem chegou mais tarde não recupera o atraso: entra na posição atual da
+    // fila e espera a vez dele. O ajuste é gravado na planilha (AJUSTE_FILA)
+    // porque precisa valer também nas próximas distribuições.
+    for (const { closer, novoAjuste } of calcularEntradasTardias(closers, closers.todos)) {
+      closer.ajusteFila = novoAjuste;
+      try {
+        await salvarAjusteFila(closer, novoAjuste);
+      } catch (errAjuste) {
+        console.warn(`Aviso: não foi possível gravar AJUSTE_FILA de ${closer.nome}. Erro: ${errAjuste.message}`);
+      }
     }
 
     const escolhido = escolherCloser(closers);
