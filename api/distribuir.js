@@ -1,5 +1,12 @@
-const { getClosersElegiveis, incrementarContador, salvarAjusteFila, registrarLog } = require("../lib/sheets");
-const { escolherCloser, calcularEntradasTardias } = require("../lib/distribuicao");
+const {
+  getClosersElegiveis,
+  incrementarContador,
+  salvarAjusteFila,
+  contarReunioesAgendadasPorDia,
+  registrarLog,
+} = require("../lib/sheets");
+const { escolherCloser, escolherCloserOutroDia, calcularEntradasTardias } = require("../lib/distribuicao");
+const { norm } = require("../lib/normalizar");
 const { buscarOwnerIdPorNome, moverEAtribuirDeal, buscarReuniaoRelevante } = require("../lib/pipedrive");
 const { DESTINO_POR_SUBAREA } = require("../lib/config");
 
@@ -68,19 +75,35 @@ module.exports = async (req, res) => {
       });
     }
 
-    // Quem chegou mais tarde não recupera o atraso: entra na posição atual da
-    // fila e espera a vez dele. O ajuste é gravado na planilha (AJUSTE_FILA)
-    // porque precisa valer também nas próximas distribuições.
-    for (const { closer, novoAjuste } of calcularEntradasTardias(closers, closers.todos)) {
-      closer.ajusteFila = novoAjuste;
+    let escolhido;
+    if (reuniaoEhDeOutroDia) {
+      // Fila própria das reuniões de outro dia: rodízio pelo que já foi
+      // distribuído pra AQUELA data (os contadores de hoje não mudam com
+      // reunião de amanhã e dariam sempre o mesmo closer).
+      let contagens = {};
       try {
-        await salvarAjusteFila(closer, novoAjuste);
-      } catch (errAjuste) {
-        console.warn(`Aviso: não foi possível gravar AJUSTE_FILA de ${closer.nome}. Erro: ${errAjuste.message}`);
+        contagens = await contarReunioesAgendadasPorDia(reuniao.due_date);
+      } catch (errContagem) {
+        console.warn(
+          `Aviso: não foi possível contar as reuniões já distribuídas pra ${reuniao.due_date}. Erro: ${errContagem.message}`
+        );
       }
+      for (const c of closers) c.agendadasNoDia = contagens[norm(c.nome)] || 0;
+      escolhido = escolherCloserOutroDia(closers);
+    } else {
+      // Quem chegou mais tarde não recupera o atraso: entra na posição atual
+      // da fila e espera a vez dele. O ajuste é gravado na planilha
+      // (AJUSTE_FILA) porque precisa valer também nas próximas distribuições.
+      for (const { closer, novoAjuste } of calcularEntradasTardias(closers, closers.todos)) {
+        closer.ajusteFila = novoAjuste;
+        try {
+          await salvarAjusteFila(closer, novoAjuste);
+        } catch (errAjuste) {
+          console.warn(`Aviso: não foi possível gravar AJUSTE_FILA de ${closer.nome}. Erro: ${errAjuste.message}`);
+        }
+      }
+      escolhido = escolherCloser(closers);
     }
-
-    const escolhido = escolherCloser(closers);
     const destino = DESTINO_POR_SUBAREA[escolhido.subareaNorm];
     if (!destino) {
       return res.status(500).json({ error: `Sem destino configurado para subarea '${escolhido.subareaNorm}'.` });
@@ -110,6 +133,8 @@ module.exports = async (req, res) => {
         );
       }
     } else {
+      // No log, REUNIOES_DO_DIA mostra quantas já estão marcadas pra aquela data (incluindo esta).
+      reunioesAposDistribuicao = (escolhido.agendadasNoDia || 0) + 1;
       console.log(`Deal ${dealId}: reunião agendada pra outro dia, não incrementado o contador de hoje.`);
     }
 
