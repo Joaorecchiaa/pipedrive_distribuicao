@@ -46,13 +46,8 @@ module.exports = async (req, res) => {
 
     // Busca a reunião (due_date + due_time) ANTES de escolher o closer.
     //
-    // Reunião de OUTRO DIA (amanhã em diante): só quem estiver de plantão
-    // naquele dia/horário pode receber — bate a escala contra o horário da
-    // própria reunião, não contra agora.
-    //
-    // Reunião de HOJE (ou deal sem reunião marcada ainda): o closer precisa
-    // estar de plantão AGORA — é ele quem vai atender esse lead na hora, não
-    // só estar presente no horário da reunião marcada.
+    // A escala é conferida contra o dia/horário da própria reunião (ver
+    // momentoEscala abaixo). Deal sem reunião marcada: escala de agora.
     let reuniao = null;
     try {
       reuniao = await buscarReuniaoRelevante(dealId);
@@ -65,9 +60,25 @@ module.exports = async (req, res) => {
     const hojeStrEscala = new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }); // "AAAA-MM-DD"
     const reuniaoEhDeOutroDia = !!(reuniao && reuniao.due_date && reuniao.due_date !== hojeStrEscala);
 
-    const closers = await getClosersElegiveis(
-      reuniaoEhDeOutroDia ? { data: reuniao.due_date, hora: reuniao.due_time } : null
-    );
+    // A escala é sempre conferida no dia/horário DA REUNIÃO (hoje ou outro dia):
+    // quem entra às 11h pode receber, às 09h, uma reunião marcada pras 12h.
+    // Exceções: reunião de hoje sem horário (dia todo) ou com horário que já
+    // passou → vale a escala de agora (quem vai atender é quem está de plantão).
+    let momentoEscala = null;
+    if (reuniao && reuniao.due_date) {
+      if (reuniaoEhDeOutroDia) {
+        momentoEscala = { data: reuniao.due_date, hora: reuniao.due_time };
+      } else if (reuniao.due_time) {
+        const horaAgora = new Date().toLocaleTimeString("en-GB", {
+          timeZone: "America/Sao_Paulo",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        });
+        momentoEscala = { data: reuniao.due_date, hora: reuniao.due_time > horaAgora ? reuniao.due_time : horaAgora };
+      }
+    }
+    const closers = await getClosersElegiveis(momentoEscala);
     if (closers.length === 0) {
       return res.status(422).json({
         error:
