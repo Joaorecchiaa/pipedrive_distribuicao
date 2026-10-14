@@ -69,9 +69,9 @@ module.exports = async (req, res) => {
     // Head remanejou o deal pra OUTRO CLOSER (mesmo funil ou outro): NÃO é uma
     // reunião que voltou (o log não é marcado ALTERADO, então não entra em
     // "voltaram"). A reunião válida sai de quem estava com ela e entra pro novo
-    // closer (REUNIOES_ATUAIS_HOJE). RECEBIDAS_HOJE não muda: continua marcando
-    // a vez de quem recebeu. RESPONSAVEL_ATUAL guarda quem está com o deal
-    // agora (pra próximas trocas e pra checagem de choque de horário).
+    // closer (REUNIOES_ATUAIS_HOJE). RECEBIDAS_HOJE (histórico) não muda.
+    // NOVO_PROPRIETARIO guarda quem está com o deal agora (pra próximas trocas
+    // e pra checagem de choque de horário).
     if (await ehCloserCadastrado(donoAtual)) {
       const gravou = await registrarResponsavelAtual(logEntry, donoAtual);
       if (gravou) {
