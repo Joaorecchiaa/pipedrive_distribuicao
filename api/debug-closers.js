@@ -5,9 +5,11 @@ const {
   montarMapaCabecalho,
   getCampo,
   buscarClosersEmEscalaAgora,
+  getClosersElegiveis,
   ALIASES_COLABORADORES,
   ALIASES_DISTRIBUICAO,
 } = require("../lib/sheets");
+const { calcularEntradasTardias, ordemDaFila } = require("../lib/distribuicao");
 const {
   ABA_COLABORADORES,
   ABA_DISTRIBUICAO,
@@ -133,7 +135,32 @@ module.exports = async (req, res) => {
       });
     }
 
+    // Quem é o próximo, com as mesmas regras da distribuição (sem gravar nada). Não
+    // considera choque de horário, que depende da reunião específica do deal.
+    let proximaFila = null;
+    try {
+      const pool = await getClosersElegiveis(momento);
+      for (const { closer, novoAjuste } of calcularEntradasTardias(pool, pool.todos)) closer.ajusteFila = novoAjuste; // só em memória
+      const { fase, fila, sorteioEntre } = ordemDaFila(pool);
+      proximaFila = {
+        fase, // "fila" = determinístico; "sorteio" = todos já na meta
+        proximo: fase === "fila" ? fila[0].nome : "(sorteio)",
+        ordem: fila.map((c, i) => ({
+          posicao: i + 1,
+          nome: c.nome,
+          reunioesAtuais: c.reunioesHoje,
+          meta: c.limite,
+          peso: c.vezesNaFila,
+        })),
+        sorteioEntre: sorteioEntre.map((c) => c.nome),
+        observacao: "Não considera choque de horário (depende da reunião do deal).",
+      };
+    } catch (e) {
+      proximaFila = { erro: e.message };
+    }
+
     return res.status(200).json({
+      proximaNaFila: proximaFila,
       cabecalhosColaboradores: sheetColab.headerValues,
       cabecalhosDistribuicao: sheetDist.headerValues,
       totalLinhasDistribuicao: rowsDist.length,
@@ -144,8 +171,6 @@ module.exports = async (req, res) => {
       totalClosersNaPlanilha: diagnostico.length,
       totalElegiveis: elegiveisCount,
       momentoSimulado: momento,
-      // "fila": tem alguém elegível abaixo da meta; "sorteio": todos os elegíveis já bateram a meta (próxima reunião vai por sorteio e passa da meta de quem ganhar)
-      proximaFase: diagnostico.some((d) => d.elegivel && d.abaixoDaMeta) ? "fila" : "sorteio",
       detalhes: diagnostico,
     });
   } catch (err) {
