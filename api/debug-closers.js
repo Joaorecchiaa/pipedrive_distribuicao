@@ -16,6 +16,7 @@ const {
   COLUNA_CARGO_DISTRIBUICAO,
   COLUNA_META,
   COLUNA_RECEBIDAS,
+  COLUNA_CREDITO_ATUAL,
 } = require("../lib/config");
 
 module.exports = async (req, res) => {
@@ -50,7 +51,14 @@ module.exports = async (req, res) => {
     const mesAtual = hoje.getMonth() + 1;
     const anoAtual = hoje.getFullYear();
 
-    const emEscala = await buscarClosersEmEscalaAgora();
+    // ?data=AAAA-MM-DD&hora=HH:MM simula a escala NO HORÁRIO DA REUNIÃO (sem isso, usa agora).
+    const momento = req.query?.hora
+      ? {
+          data: req.query.data || new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" }),
+          hora: req.query.hora,
+        }
+      : null;
+    const emEscala = await buscarClosersEmEscalaAgora(momento);
     const fallbackAtivo = emEscala.size === 0;
 
     const diagnostico = [];
@@ -85,6 +93,7 @@ module.exports = async (req, res) => {
       const entradaDist = indiceDist[norm(nome)];
       let meta = null;
       let recebidas = null;
+      let creditoAtual = null;
       let ordemFila = null;
       if (!entradaDist) {
         motivos.push(`Nome '${nome}' não encontrado na aba '${ABA_DISTRIBUICAO}' com Cargo contendo "closer" (normalizado: '${norm(nome)}')`);
@@ -96,6 +105,7 @@ module.exports = async (req, res) => {
           motivos.push(`Meta '${metaRaw}' na coluna ${COLUNA_META} ausente ou inválida`);
         }
         recebidas = parseFloat(getCampo(entradaDist.row, mapaDist, COLUNA_RECEBIDAS) || "0") || 0;
+        creditoAtual = parseFloat(getCampo(entradaDist.row, mapaDist, COLUNA_CREDITO_ATUAL) || "0") || 0;
       }
 
       if (motivos.length === 0 && !fallbackAtivo && !emEscala.has(norm(nome))) {
@@ -114,8 +124,10 @@ module.exports = async (req, res) => {
         encontradoNaDistribuicao: !!entradaDist,
         ordemFila,
         meta,
-        recebidasHoje: recebidas,
-        naEscalaAgora: emEscala.has(norm(nome)),
+        recebidasHoje: recebidas, // histórico (só sobe) — não decide a fila
+        reunioesAtuaisHoje: creditoAtual, // é este que a fila e a meta usam
+        naEscalaAgora: emEscala.has(norm(nome)), // no horário simulado, se ?hora= foi passado
+        abaixoDaMeta: meta ? creditoAtual < meta : null,
         elegivel: motivos.length === 0,
         motivos_exclusao: motivos,
       });
@@ -131,6 +143,9 @@ module.exports = async (req, res) => {
       totalClosersNaEscalaAgora: emEscala.size,
       totalClosersNaPlanilha: diagnostico.length,
       totalElegiveis: elegiveisCount,
+      momentoSimulado: momento,
+      // "fila": tem alguém elegível abaixo da meta; "sorteio": todos os elegíveis já bateram a meta (próxima reunião vai por sorteio e passa da meta de quem ganhar)
+      proximaFase: diagnostico.some((d) => d.elegivel && d.abaixoDaMeta) ? "fila" : "sorteio",
       detalhes: diagnostico,
     });
   } catch (err) {
