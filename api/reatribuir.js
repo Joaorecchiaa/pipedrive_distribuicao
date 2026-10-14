@@ -62,40 +62,57 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "dono não mudou de fato" });
     }
 
-    // Head remanejou o deal pra OUTRO CLOSER (mesmo funil ou outro): não é uma
-    // reunião que voltou. O closer original continua com a reunião na conta
-    // dele (recebidas e crédito), o novo não ganha nem perde nada, e o log NÃO
-    // é marcado como ALTERADO (não entra em "voltaram"). Só anotamos quem está
-    // com o deal, pra checagem de choque de horário.
+    // A distribuição só mexeu nos contadores de hoje se foi feita hoje E a
+    // reunião era pra hoje (reunião de outro dia não conta em dia nenhum).
+    const contouHoje = ehHoje(logEntry.dataHora) && !logEntry.agendadaOutroDia;
+
+    // Head remanejou o deal pra OUTRO CLOSER (mesmo funil ou outro): NÃO é uma
+    // reunião que voltou (o log não é marcado ALTERADO, então não entra em
+    // "voltaram"). A reunião válida sai de quem estava com ela e entra pro novo
+    // closer (REUNIOES_ATUAIS_HOJE). RECEBIDAS_HOJE não muda: continua marcando
+    // a vez de quem recebeu. RESPONSAVEL_ATUAL guarda quem está com o deal
+    // agora (pra próximas trocas e pra checagem de choque de horário).
     if (await ehCloserCadastrado(donoAtual)) {
       const gravou = await registrarResponsavelAtual(logEntry, donoAtual);
-      console.log(
-        `Deal ${dealId} remanejado de ${responsavelAnterior} para ${donoAtual} (closer → closer). Contadores mantidos.` +
-          (gravou ? "" : ` Coluna RESPONSAVEL_ATUAL não existe no log: responsável não registrado.`)
-      );
-      return res.status(200).json({
-        ok: true,
-        acao: "remanejado_entre_closers",
-        deal_id: dealId,
-        closer_original: logEntry.colaborador,
-        novo_dono: donoAtual,
-        contadores_alterados: false,
-      });
+      if (gravou) {
+        let transf = null;
+        if (contouHoje) transf = await transferirCredito(responsavelAnterior, donoAtual);
+        console.log(
+          `Deal ${dealId} remanejado de ${responsavelAnterior} para ${donoAtual} (closer → closer). ` +
+            (transf
+              ? `Reuniões válidas: ${responsavelAnterior} → ${transf.creditoAntigoNovoValor}, ${donoAtual} → ${transf.creditoNovoNovoValor}.`
+              : `Reunião não contava em hoje: contadores mantidos.`)
+        );
+        return res.status(200).json({
+          ok: true,
+          acao: "remanejado_entre_closers",
+          deal_id: dealId,
+          de: responsavelAnterior,
+          para: donoAtual,
+          credito_de: transf ? transf.creditoAntigoNovoValor : null,
+          credito_para: transf ? transf.creditoNovoNovoValor : null,
+        });
+      }
+      // Sem a coluna RESPONSAVEL_ATUAL no log não dá pra rastrear a troca nem
+      // evitar contar duas vezes: segue o fluxo antigo (marca ALTERADO).
+      console.warn("Coluna RESPONSAVEL_ATUAL não existe no log_distribuicao — usando o fluxo antigo (ALTERADO = Sim).");
     }
 
-    if (!ehHoje(logEntry.dataHora)) {
-      // Distribuição foi em outro dia — o contador já resetou, nada a
+    if (!contouHoje) {
+      // Distribuição foi em outro dia, ou a reunião era de outro dia: nada a
       // descontar na planilha (mas registra que já vimos essa divergência).
       await marcarLogAlterado(logEntry, donoAtual);
-      return res.status(200).json({ ok: true, acao: "ignorado", motivo: "registro de dia anterior" });
+      return res.status(200).json({ ok: true, acao: "ignorado", motivo: "registro de dia anterior ou reunião de outro dia" });
     }
 
-    const novoValor = await transferirCredito(logEntry.colaborador, donoAtual);
+    // Voltou pra alguém que não é closer (SDR, head...): desconta de quem estava
+    // com a reunião e marca como voltou.
+    const novoValor = await transferirCredito(responsavelAnterior, donoAtual);
     await marcarLogAlterado(logEntry, donoAtual);
 
     console.log(
-      `Deal ${dealId} reatribuído de ${logEntry.colaborador} para ${donoAtual}. ` +
-        `Crédito de ${logEntry.colaborador} corrigido para ${novoValor.creditoAntigoNovoValor}. ` +
+      `Deal ${dealId} reatribuído de ${responsavelAnterior} para ${donoAtual}. ` +
+        `Crédito de ${responsavelAnterior} corrigido para ${novoValor.creditoAntigoNovoValor}. ` +
         (novoValor.novoEhCloser
           ? `${donoAtual} agora tem crédito ${novoValor.creditoNovoNovoValor}.`
           : `${donoAtual} não é Closer cadastrado — ninguém foi creditado.`)
@@ -105,7 +122,7 @@ module.exports = async (req, res) => {
       ok: true,
       acao: "corrigido",
       deal_id: dealId,
-      closer_original: logEntry.colaborador,
+      closer_original: responsavelAnterior,
       credito_original_corrigido_para: novoValor.creditoAntigoNovoValor,
       novo_dono: donoAtual,
       novo_dono_e_closer: novoValor.novoEhCloser,
