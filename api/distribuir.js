@@ -3,12 +3,63 @@ const {
   incrementarContador,
   salvarAjusteFila,
   contarReunioesAgendadasPorDia,
+  carregarAgendaDoDia,
+  reunioesSeChocam,
   registrarLog,
 } = require("../lib/sheets");
 const { escolherCloser, escolherCloserOutroDia, calcularEntradasTardias } = require("../lib/distribuicao");
 const { norm } = require("../lib/normalizar");
-const { buscarOwnerIdPorNome, moverEAtribuirDeal, buscarReuniaoRelevante } = require("../lib/pipedrive");
-const { DESTINO_POR_SUBAREA } = require("../lib/config");
+const {
+  buscarOwnerIdPorNome,
+  moverEAtribuirDeal,
+  buscarReuniaoRelevante,
+  buscarDonoAtualDoDeal,
+} = require("../lib/pipedrive");
+const { DESTINO_POR_SUBAREA, DURACAO_PADRAO_REUNIAO_MIN } = require("../lib/config");
+
+function horaParaMinutos(str) {
+  const m = String(str || "").match(/^(\d{1,2}):(\d{2})/);
+  return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
+}
+
+/**
+ * O closer já tem outra reunião que se choca com esta (mesmo dia, horários
+ * sobrepostos)? A agenda vem do log_distribuicao; antes de barrar o closer,
+ * confere no Pipedrive se aquela reunião continua no mesmo horário e com ele
+ * (o SDR pode ter remarcado, ou o head remanejado) — log velho não bloqueia
+ * ninguém à toa. Se o Pipedrive não responder, vale o log (lado conservador).
+ */
+async function closerTemChoque(closer, agenda, reuniao, dealId) {
+  const inicio = horaParaMinutos(reuniao && reuniao.due_time);
+  if (inicio === null) return false; // sem horário (dia todo): não há o que comparar
+  const nova = { inicio, fim: inicio + (reuniao.duracao_min || DURACAO_PADRAO_REUNIAO_MIN) };
+
+  const candidatas = (agenda[norm(closer.nome)] || []).filter(
+    (e) => e.dealId !== String(dealId) && reunioesSeChocam(e, nova)
+  );
+
+  for (const e of candidatas) {
+    try {
+      const atual = await buscarReuniaoRelevante(e.dealId);
+      const { ownerNome } = await buscarDonoAtualDoDeal(e.dealId);
+      const iniAtual = atual ? horaParaMinutos(atual.due_time) : null;
+      const aindaChoca =
+        atual &&
+        atual.due_date === reuniao.due_date &&
+        iniAtual !== null &&
+        reunioesSeChocam(
+          { inicio: iniAtual, fim: iniAtual + (atual.duracao_min || DURACAO_PADRAO_REUNIAO_MIN) },
+          nova
+        ) &&
+        norm(ownerNome) === norm(closer.nome);
+      if (aindaChoca) return true;
+    } catch (err) {
+      console.warn(`Aviso: não foi possível confirmar a reunião do deal ${e.dealId} no Pipedrive (${err.message}). Valendo o log.`);
+      return true;
+    }
+  }
+  return false;
+}
 
 // Extrai o ID do deal do payload do webhook do Pipedrive.
 // Cobre os formatos mais comuns (v1 legado e v2).
@@ -87,6 +138,7 @@ module.exports = async (req, res) => {
     }
 
     let escolhido;
+    let escolherDaFila;
     if (reuniaoEhDeOutroDia) {
       // Fila própria das reuniões de outro dia: rodízio pelo que já foi
       // distribuído pra AQUELA data (os contadores de hoje não mudam com
@@ -100,7 +152,7 @@ module.exports = async (req, res) => {
         );
       }
       for (const c of closers) c.agendadasNoDia = contagens[norm(c.nome)] || 0;
-      escolhido = escolherCloserOutroDia(closers);
+      escolherDaFila = escolherCloserOutroDia;
     } else {
       // Quem chegou mais tarde não recupera o atraso: entra na posição atual
       // da fila e espera a vez dele. O ajuste é gravado na planilha
@@ -113,8 +165,48 @@ module.exports = async (req, res) => {
           console.warn(`Aviso: não foi possível gravar AJUSTE_FILA de ${closer.nome}. Erro: ${errAjuste.message}`);
         }
       }
-      escolhido = escolherCloser(closers);
+      escolherDaFila = escolherCloser;
     }
+
+    // Choque de horário: o closer da vez que já tem reunião nesse dia/horário
+    // (hoje ou outro dia) é pulado e a vez passa pro próximo da fila. Como ele
+    // não recebeu, o contador dele não sobe: continua primeiro pra próxima.
+    let agenda = {};
+    if (reuniao && reuniao.due_date && reuniao.due_time) {
+      try {
+        agenda = await carregarAgendaDoDia(reuniao.due_date);
+      } catch (errAgenda) {
+        console.warn(
+          `Aviso: não foi possível ler a agenda de ${reuniao.due_date} no log. Sem checagem de choque de horário. Erro: ${errAgenda.message}`
+        );
+      }
+    }
+
+    let candidatos = [...closers];
+    const pulados = [];
+    while (candidatos.length > 0) {
+      const da_vez = escolherDaFila(candidatos);
+      if (!(await closerTemChoque(da_vez, agenda, reuniao, dealId))) {
+        escolhido = da_vez;
+        break;
+      }
+      pulados.push(da_vez.nome);
+      candidatos = candidatos.filter((c) => c !== da_vez);
+    }
+
+    let choqueForcado = false;
+    if (!escolhido) {
+      // Todo mundo do pool está ocupado nesse horário: melhor entregar (o head
+      // remaneja) do que deixar o lead parado em DISTRIBUIÇÃO.
+      choqueForcado = true;
+      escolhido = escolherDaFila(closers);
+      console.warn(
+        `Deal ${dealId}: todos os closers elegíveis já têm reunião em ${reuniao.due_date} ${reuniao.due_time}. Atribuído a ${escolhido.nome} mesmo assim.`
+      );
+    } else if (pulados.length > 0) {
+      console.log(`Deal ${dealId}: pulou ${pulados.join(", ")} (já têm reunião no mesmo horário). Atribuído a ${escolhido.nome}.`);
+    }
+
     const destino = DESTINO_POR_SUBAREA[escolhido.subareaNorm];
     if (!destino) {
       return res.status(500).json({ error: `Sem destino configurado para subarea '${escolhido.subareaNorm}'.` });
@@ -151,7 +243,7 @@ module.exports = async (req, res) => {
 
     // Log em log_distribuicao — não deixa o fluxo quebrar se a aba ainda não existir.
     try {
-      await registrarLog(escolhido, dealId, reunioesAposDistribuicao, contaHoje ? null : dueDateEncontrada);
+      await registrarLog(escolhido, dealId, reunioesAposDistribuicao, contaHoje ? null : dueDateEncontrada, reuniao);
     } catch (errLog) {
       console.warn(`Aviso: não foi possível registrar no log_distribuicao. Erro: ${errLog.message}`);
     }
@@ -165,6 +257,8 @@ module.exports = async (req, res) => {
       subarea: escolhido.subareaNorm,
       destino,
       contou_para_hoje: contaHoje,
+      pulados_por_choque_de_horario: pulados,
+      choque_de_horario_forcado: choqueForcado,
     });
   } catch (err) {
     console.error("Erro ao processar distribuição:", err);
