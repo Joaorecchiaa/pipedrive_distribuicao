@@ -5,6 +5,8 @@ const {
   marcarLogAlterado,
   transferirCredito,
   ehHoje,
+  ehCloserCadastrado,
+  registrarResponsavelAtual,
 } = require("../lib/sheets");
 
 function extrairDealId(body) {
@@ -51,10 +53,34 @@ module.exports = async (req, res) => {
 
     const { ownerNome: donoAtual } = await buscarDonoAtualDoDeal(dealId);
 
-    if (norm(donoAtual) === norm(logEntry.colaborador)) {
+    // Quem está com o deal segundo o log: o closer que a automação escolheu ou,
+    // se o head já remanejou entre closers antes, o último responsável gravado.
+    const responsavelAnterior = logEntry.responsavelAtual || logEntry.colaborador;
+    if (norm(donoAtual) === norm(responsavelAnterior)) {
       // Dono atual é o mesmo que a automação atribuiu — provavelmente é o
       // próprio webhook disparado pela nossa mudança de dono. Nada a fazer.
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "dono não mudou de fato" });
+    }
+
+    // Head remanejou o deal pra OUTRO CLOSER (mesmo funil ou outro): não é uma
+    // reunião que voltou. O closer original continua com a reunião na conta
+    // dele (recebidas e crédito), o novo não ganha nem perde nada, e o log NÃO
+    // é marcado como ALTERADO (não entra em "voltaram"). Só anotamos quem está
+    // com o deal, pra checagem de choque de horário.
+    if (await ehCloserCadastrado(donoAtual)) {
+      const gravou = await registrarResponsavelAtual(logEntry, donoAtual);
+      console.log(
+        `Deal ${dealId} remanejado de ${responsavelAnterior} para ${donoAtual} (closer → closer). Contadores mantidos.` +
+          (gravou ? "" : ` Coluna RESPONSAVEL_ATUAL não existe no log: responsável não registrado.`)
+      );
+      return res.status(200).json({
+        ok: true,
+        acao: "remanejado_entre_closers",
+        deal_id: dealId,
+        closer_original: logEntry.colaborador,
+        novo_dono: donoAtual,
+        contadores_alterados: false,
+      });
     }
 
     if (!ehHoje(logEntry.dataHora)) {
