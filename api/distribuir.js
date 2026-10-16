@@ -3,6 +3,7 @@ const {
   incrementarContador,
   salvarAjusteFila,
   contarReunioesAgendadasPorDia,
+  semearReunioesDeHoje,
   carregarAgendaDoDia,
   reunioesSeChocam,
   registrarLog,
@@ -128,6 +129,13 @@ module.exports = async (req, res) => {
         });
         momentoEscala = { data: reuniao.due_date, hora: reuniao.due_time > horaAgora ? reuniao.due_time : horaAgora };
       }
+    }
+    // Reuniões marcadas em dias anteriores pra HOJE entram em REUNIOES_ATUAIS_HOJE
+    // antes de decidir quem está abaixo da meta (idempotente: soma cada deal 1x).
+    try {
+      await semearReunioesDeHoje();
+    } catch (errSemear) {
+      console.warn(`Aviso: não foi possível somar as reuniões de dias anteriores. Erro: ${errSemear.message}`);
     }
     const closers = await getClosersElegiveis(momentoEscala);
     if (closers.length === 0) {
