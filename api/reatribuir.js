@@ -7,6 +7,8 @@ const {
   ehHoje,
   ehCloserCadastrado,
   registrarResponsavelAtual,
+  semearReunioesDeHoje,
+  hojeISOSaoPaulo,
 } = require("../lib/sheets");
 
 function extrairDealId(body) {
@@ -39,6 +41,13 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: "Não foi possível identificar o deal_id no payload." });
     }
 
+    // Garante que as reuniões de dias anteriores pra hoje já estão somadas antes de qualquer desconto.
+    try {
+      await semearReunioesDeHoje();
+    } catch (errSemear) {
+      console.warn(`Aviso: não foi possível somar as reuniões de dias anteriores. Erro: ${errSemear.message}`);
+    }
+
     const logEntry = await buscarUltimoLogPorDeal(dealId);
     if (!logEntry) {
       // Deal nunca passou pela distribuição automática — nada a corrigir.
@@ -64,7 +73,10 @@ module.exports = async (req, res) => {
 
     // A distribuição só mexeu nos contadores de hoje se foi feita hoje E a
     // reunião era pra hoje (reunião de outro dia não conta em dia nenhum).
-    const contouHoje = ehHoje(logEntry.dataHora) && !logEntry.agendadaOutroDia;
+    // Também conta a reunião distribuída em dia anterior pra HOJE, já somada (CREDITADA_EM = hoje).
+    const contouHoje =
+      (ehHoje(logEntry.dataHora) && !logEntry.agendadaOutroDia) ||
+      (logEntry.agendadaOutroDia === hojeISOSaoPaulo() && logEntry.creditadaEm === hojeISOSaoPaulo());
 
     // Head remanejou o deal pra OUTRO CLOSER (mesmo funil ou outro): NÃO é uma
     // reunião que voltou (o log não é marcado ALTERADO, então não entra em
