@@ -1,6 +1,8 @@
 const {
   getClosersElegiveis,
   incrementarContador,
+  buscarCreditoAtivoDoDeal,
+  descontarCredito,
   salvarAjusteFila,
   contarReunioesAgendadasPorDia,
   semearReunioesDeHoje,
@@ -235,9 +237,25 @@ module.exports = async (req, res) => {
 
     let reunioesAposDistribuicao = escolhido.reunioesHoje;
     if (contaHoje) {
-      reunioesAposDistribuicao = escolhido.reunioesHoje + 1;
+      // Deal redistribuído (head devolveu pra DISTRIBUIÇÃO): quem estava com ele
+      // perde o crédito, senão a mesma reunião conta duas vezes.
+      let mesmoCloser = false;
       try {
-        reunioesAposDistribuicao = await incrementarContador(escolhido);
+        const anterior = await buscarCreditoAtivoDoDeal(dealId);
+        if (anterior) {
+          if (norm(anterior) === norm(escolhido.nome)) {
+            mesmoCloser = true; // voltou pro mesmo closer: não soma de novo
+          } else {
+            const novoValor = await descontarCredito(anterior);
+            console.log(`Deal ${dealId} já contava pra ${anterior}: crédito dele → ${novoValor}.`);
+          }
+        }
+      } catch (errAnterior) {
+        console.warn(`Aviso: não foi possível descontar o closer anterior do deal ${dealId}. Erro: ${errAnterior.message}`);
+      }
+      reunioesAposDistribuicao = escolhido.reunioesHoje + (mesmoCloser ? 0 : 1);
+      try {
+        reunioesAposDistribuicao = await incrementarContador(escolhido, { semCredito: mesmoCloser });
       } catch (errContador) {
         console.warn(
           `Aviso: não foi possível incrementar o contador. Deal foi distribuído normalmente. Erro: ${errContador.message}`
