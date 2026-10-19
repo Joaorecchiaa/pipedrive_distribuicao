@@ -41,14 +41,19 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: "Não foi possível identificar o deal_id no payload." });
     }
 
-    // Garante que as reuniões de dias anteriores pra hoje já estão somadas antes de qualquer desconto.
-    try {
-      await semearReunioesDeHoje();
-    } catch (errSemear) {
-      console.warn(`Aviso: não foi possível somar as reuniões de dias anteriores. Erro: ${errSemear.message}`);
-    }
+    let logEntry = await buscarUltimoLogPorDeal(dealId);
 
-    const logEntry = await buscarUltimoLogPorDeal(dealId);
+    // Se o deal é uma reunião de dia anterior pra HOJE e ainda não foi somada, soma antes de
+    // descontar. Só nesse caso: a maioria das chamadas é de deal sem distribuição e sai sem gastar
+    // leituras da planilha (cota do Google Sheets).
+    if (logEntry && logEntry.agendadaOutroDia === hojeISOSaoPaulo() && logEntry.creditadaEm !== hojeISOSaoPaulo()) {
+      try {
+        await semearReunioesDeHoje();
+        logEntry = (await buscarUltimoLogPorDeal(dealId)) || logEntry;
+      } catch (errSemear) {
+        console.warn(`Aviso: não foi possível somar as reuniões de dias anteriores. Erro: ${errSemear.message}`);
+      }
+    }
     if (!logEntry) {
       // Deal nunca passou pela distribuição automática — nada a corrigir.
       console.log(`Reatribuir deal ${dealId}: ignorado — deal não distribuído automaticamente (sem linha no log dos últimos dias úteis).`);
