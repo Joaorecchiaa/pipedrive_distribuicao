@@ -1,7 +1,7 @@
 const {
   getClosersElegiveis,
   incrementarContador,
-  buscarCreditoAtivoDoDeal,
+  analisarLogDoDeal,
   descontarCredito,
   salvarAjusteFila,
   contarReunioesAgendadasPorDia,
@@ -147,6 +147,22 @@ module.exports = async (req, res) => {
       });
     }
 
+    // Histórico do deal hoje (1 leitura do log): quem já teve esse deal e quem está contando ele.
+    let historicoDeal = { creditoAtivo: null, donosHoje: new Set() };
+    try {
+      historicoDeal = await analisarLogDoDeal(dealId);
+    } catch (errHist) {
+      console.warn(`Aviso: não foi possível ler o histórico do deal ${dealId} no log. Erro: ${errHist.message}`);
+    }
+    // Deal redistribuído: não volta pra quem já ficou com ele hoje (o head redistribuiu justamente
+    // pra trocar). Se só sobrar quem já teve, vale o pool inteiro.
+    let poolDoDeal = closers.filter((c) => !historicoDeal.donosHoje.has(norm(c.nome)));
+    const excluidosPorJaTerTido = closers.filter((c) => historicoDeal.donosHoje.has(norm(c.nome))).map((c) => c.nome);
+    if (poolDoDeal.length === 0) poolDoDeal = closers;
+    else if (excluidosPorJaTerTido.length > 0) {
+      console.log(`Deal ${dealId}: não volta pra quem já teve hoje (${excluidosPorJaTerTido.join(", ")}).`);
+    }
+
     let escolhido;
     let escolherDaFila;
     if (reuniaoEhDeOutroDia) {
@@ -192,7 +208,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    let candidatos = [...closers];
+    let candidatos = [...poolDoDeal];
     const pulados = [];
     while (candidatos.length > 0) {
       const da_vez = escolherDaFila(candidatos);
@@ -209,7 +225,7 @@ module.exports = async (req, res) => {
       // Todo mundo do pool está ocupado nesse horário: melhor entregar (o head
       // remaneja) do que deixar o lead parado em DISTRIBUIÇÃO.
       choqueForcado = true;
-      escolhido = escolherDaFila(closers);
+      escolhido = escolherDaFila(poolDoDeal);
       console.warn(
         `Deal ${dealId}: todos os closers elegíveis já têm reunião em ${reuniao.due_date} ${reuniao.due_time}. Atribuído a ${escolhido.nome} mesmo assim.`
       );
@@ -241,7 +257,7 @@ module.exports = async (req, res) => {
       // perde o crédito, senão a mesma reunião conta duas vezes.
       let mesmoCloser = false;
       try {
-        const anterior = await buscarCreditoAtivoDoDeal(dealId);
+        const anterior = historicoDeal.creditoAtivo;
         if (anterior) {
           if (norm(anterior) === norm(escolhido.nome)) {
             mesmoCloser = true; // voltou pro mesmo closer: não soma de novo
