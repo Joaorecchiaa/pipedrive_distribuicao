@@ -111,6 +111,7 @@ module.exports = async (req, res) => {
     const contagem = {};
     const deals = {};
     for (const r of resolvidos) {
+      if (!r.dono) continue;
       const k = norm(r.dono);
       contagem[k] = (contagem[k] || 0) + 1;
       (deals[k] = deals[k] || []).push(r.dealId);
