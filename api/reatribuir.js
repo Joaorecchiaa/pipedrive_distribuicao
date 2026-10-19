@@ -51,12 +51,14 @@ module.exports = async (req, res) => {
     const logEntry = await buscarUltimoLogPorDeal(dealId);
     if (!logEntry) {
       // Deal nunca passou pela distribuição automática — nada a corrigir.
+      console.log(`Reatribuir deal ${dealId}: ignorado — deal não distribuído automaticamente (sem linha no log dos últimos dias úteis).`);
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "deal não distribuído automaticamente" });
     }
 
     if (norm(logEntry.alterado) === "sim") {
       // Já corrigimos essa distribuição antes — não desconta de novo mesmo
       // que o deal continue trocando de mão.
+      console.log(`Reatribuir deal ${dealId}: ignorado — a última distribuição já está marcada ALTERADO = Sim (já descontada antes).`);
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "já corrigido anteriormente" });
     }
 
@@ -68,6 +70,7 @@ module.exports = async (req, res) => {
     if (norm(donoAtual) === norm(responsavelAnterior)) {
       // Dono atual é o mesmo que a automação atribuiu — provavelmente é o
       // próprio webhook disparado pela nossa mudança de dono. Nada a fazer.
+      console.log(`Reatribuir deal ${dealId}: ignorado — dono atual (${donoAtual}) é o mesmo que o log registra (${responsavelAnterior}).`);
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "dono não mudou de fato" });
     }
 
@@ -114,6 +117,7 @@ module.exports = async (req, res) => {
       // Distribuição foi em outro dia, ou a reunião era de outro dia: nada a
       // descontar na planilha (mas registra que já vimos essa divergência).
       await marcarLogAlterado(logEntry, donoAtual);
+      console.log(`Reatribuir deal ${dealId}: de ${responsavelAnterior} para ${donoAtual} — NÃO descontou: distribuição de dia anterior ou reunião de outro dia (log: ${logEntry.dataHora}, outro dia: ${logEntry.agendadaOutroDia || "não"}).`);
       return res.status(200).json({ ok: true, acao: "ignorado", motivo: "registro de dia anterior ou reunião de outro dia" });
     }
 
